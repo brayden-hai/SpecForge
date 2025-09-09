@@ -96,6 +96,16 @@ TEMPLATE_REGISTRY.register(
 )
 
 TEMPLATE_REGISTRY.register(
+    name="i60",
+    template=ChatTemplate(
+        assistant_header="<|start_header_id|>assistant<|end_header_id|>\n\n",
+        user_header="<|start_header_id|>user<|end_header_id|>",
+        system_prompt="",
+        end_of_turn_token="<|eot_id|>",
+    ),
+)
+
+TEMPLATE_REGISTRY.register(
     name="llama4",
     template=ChatTemplate(
         assistant_header="<|header_start|>assistant<|header_end|>\n\n",
