@@ -9,7 +9,7 @@ torchrun \
     --standalone \
     --nproc_per_node $NUM_GPUS \
     $ROOT_DIR/scripts/train_eagle3_online.py \
-    --target-model-path /hai-coreweave-training/release/i60 \
+    --target-model-path /hai/release/i60 \
     --draft-model-config $ROOT_DIR/configs/llama3-405B-eagle3.json \
     --train-data-path /workspace/brayden/dataset.jsonl \
     --output-dir /workspace/brayden/i60-eagle3 \
