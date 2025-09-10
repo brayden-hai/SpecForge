@@ -631,12 +631,21 @@ class LlamaFlexAttention(LlamaAttention):
             KV_LEN=key_cache.shape[-2],
             device=query_states.device,
         )
+        kernel_options = {
+            "BLOCK_M": 32,
+            "BLOCK_N": 32,
+            "BLOCK_M1": 32,
+            "BLOCK_N1": 32,
+            "BLOCK_M2": 32,
+            "BLOCK_N2": 32,
+        }
         attn_output = flex_attention_func(
             query=query_states,
             key=key_cache.contiguous(),
             value=value_cache.contiguous(),
             block_mask=block_mask,
             enable_gqa=True,
+            kernel_options=kernel_options,
         )
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.head_dim * self.num_heads)
