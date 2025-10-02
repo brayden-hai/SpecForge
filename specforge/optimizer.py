@@ -14,6 +14,7 @@ class BF16Optimizer:
         max_grad_norm=0.5,
         total_steps=800_000,
         warmup_ratio=0.015,
+        use_master_weights=True,
     ):
         # TODO: For now, we only support cosine annealing warmup lr scheduler and AdamW optimizer
         # TODO: We should make these parameters configurable
@@ -22,14 +23,23 @@ class BF16Optimizer:
         self.model = model
         self.model_params = [p for p in model.parameters() if p.requires_grad]
         self.max_grad_norm = max_grad_norm
-        self.fp32_params = [
-            p.detach().clone().to(torch.float32) for p in self.model_params
-        ]
-        for mp in self.fp32_params:
-            mp.requires_grad = True
-        self.optimizer = torch.optim.AdamW(
-            self.fp32_params, lr=lr, weight_decay=weight_decay
-        )
+        self.use_master_weights = use_master_weights
+
+        if self.use_master_weights:
+            self.fp32_params = [
+                p.detach().clone().to(torch.float32) for p in self.model_params
+            ]
+            for mp in self.fp32_params:
+                mp.requires_grad = True
+            self.optimizer = torch.optim.AdamW(
+                self.fp32_params, lr=lr, weight_decay=weight_decay
+            )
+        else:
+            # Optimize the model parameters directly (FSDP-friendly: shards optimizer state)
+            self.fp32_params = None
+            self.optimizer = torch.optim.AdamW(
+                self.model_params, lr=lr, weight_decay=weight_decay
+            )
         self.scheduler = CosineAnnealingWarmupLR(
             self.optimizer,
             total_steps=total_steps,
@@ -37,19 +47,27 @@ class BF16Optimizer:
         )
 
     def step(self):
-        with torch.no_grad():
-            for p, mp in zip(self.model_params, self.fp32_params):
-                mp.grad = (
-                    p.grad.detach().to(torch.float32) if p.grad is not None else None
-                )
-        torch.nn.utils.clip_grad_norm_(self.fp32_params, self.max_grad_norm)
-        self.optimizer.step()
-        self.optimizer.zero_grad()
-        self.scheduler.step()
-        with torch.no_grad():
-            for p, mp in zip(self.model_params, self.fp32_params):
-                p.data.copy_(mp.data.to(p.dtype))
-                p.grad = None
+        if self.use_master_weights:
+            with torch.no_grad():
+                for p, mp in zip(self.model_params, self.fp32_params):
+                    mp.grad = (
+                        p.grad.detach().to(torch.float32)
+                        if p.grad is not None
+                        else None
+                    )
+            torch.nn.utils.clip_grad_norm_(self.fp32_params, self.max_grad_norm)
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+            self.scheduler.step()
+            with torch.no_grad():
+                for p, mp in zip(self.model_params, self.fp32_params):
+                    p.data.copy_(mp.data.to(p.dtype))
+                    p.grad = None
+        else:
+            torch.nn.utils.clip_grad_norm_(self.model_params, self.max_grad_norm)
+            self.optimizer.step()
+            self.optimizer.zero_grad()
+            self.scheduler.step()
 
     def load_state_dict(self, state_dict):
         self.optimizer.load_state_dict(state_dict["optimizer_state_dict"])

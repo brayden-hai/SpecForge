@@ -419,7 +419,7 @@ def main():
             param_dtype=torch.bfloat16,
             buffer_dtype=torch.bfloat16,
         ),
-        sharding_strategy=ShardingStrategy.SHARD_GRAD_OP,
+        sharding_strategy=ShardingStrategy.FULL_SHARD,
         ignored_modules=[target_model],
         process_group=get_dp_group(),
     )
@@ -432,6 +432,7 @@ def main():
         max_grad_norm=args.max_grad_norm,
         warmup_ratio=args.warmup_ratio,
         total_steps=args.total_steps,
+        use_master_weights=False,
     )
     print_with_rank("Initialized optimizer and scheduler")
 
