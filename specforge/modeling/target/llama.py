@@ -129,15 +129,33 @@ class LlamaAttention(nn.Module):
         self.head_dim = getattr(
             config, "head_dim", config.hidden_size // config.num_attention_heads
         )
-        self.num_key_value_groups = (
-            config.num_attention_heads // config.num_key_value_heads
-        )
         self.scaling = self.head_dim**-0.5
         self.attention_dropout = config.attention_dropout
         self.is_causal = True
 
         # distributed linear layers
         self.tp_group = get_tp_group()
+        self.tp_size = (
+            dist.get_world_size(self.tp_group) if self.tp_group is not None else 1
+        )
+        self.tp_rank = dist.get_rank(self.tp_group) if self.tp_group is not None else 0
+
+        # head configuration
+        self.total_num_heads = config.num_attention_heads
+        self.total_num_kv_heads = config.num_key_value_heads
+        self.num_heads = self.total_num_heads // self.tp_size
+
+        # KV head replication when TP > KV heads (GQA replication)
+        if self.tp_size > self.total_num_kv_heads:
+            self.num_kv_heads = 1
+            self.num_kv_head_replicas = self.tp_size // self.total_num_kv_heads
+            self.num_key_value_groups = self.num_heads // self.num_kv_heads
+            self.kv_head_replicas = True
+        else:
+            self.num_kv_heads = self.total_num_kv_heads
+            self.num_kv_head_replicas = 1
+            self.num_key_value_groups = self.total_num_heads // self.num_kv_heads
+            self.kv_head_replicas = False
         self.q_proj = ColumnParallelLinear(
             config.hidden_size,
             config.num_attention_heads * self.head_dim,
@@ -145,13 +163,15 @@ class LlamaAttention(nn.Module):
         )
         self.k_proj = ColumnParallelLinear(
             config.hidden_size,
-            config.num_key_value_heads * self.head_dim,
+            self.num_kv_heads * self.head_dim,
             bias=config.attention_bias,
+            kv_head_replicas=self.kv_head_replicas,
         )
         self.v_proj = ColumnParallelLinear(
             config.hidden_size,
-            config.num_key_value_heads * self.head_dim,
+            self.num_kv_heads * self.head_dim,
             bias=config.attention_bias,
+            kv_head_replicas=self.kv_head_replicas,
         )
         self.o_proj = RowParallelLinear(
             config.num_attention_heads * self.head_dim,
@@ -561,32 +581,78 @@ class LlamaForCausalLM(LlamaPreTrainedModel, GenerationMixin, DistributedTargetM
 
     def load_weights(self, state_dict: Dict[str, torch.Tensor]):
         tp_group = get_tp_group()
-        tp_rank = dist.get_rank(tp_group)
+        tp_size = dist.get_world_size(tp_group) if tp_group is not None else 1
+        tp_rank = dist.get_rank(tp_group) if tp_group is not None else 0
 
-        updated_state_dict = {}
+        updated_state_dict: Dict[str, torch.Tensor] = {}
         for key, value in state_dict.items():
             if not isinstance(value, torch.Tensor):
                 raise ValueError(
-                    f"Expected all values in the state dict to be torch.Tensor. "
-                    f"Found {type(value)} for key {key}."
+                    f"Expected all values in the state dict to be torch.Tensor. Found {type(value)} for key {key}."
                 )
 
             module_key = ".".join(key.split(".")[:-1])
-            module = self.get_submodule(module_key)
+            try:
+                module = self.get_submodule(module_key)
+            except AttributeError:
+                continue
 
-            if isinstance(module, ColumnParallelLinear):
-                if key.endswith(".weight"):
-                    value = self._shard_tensor(value, tp_group, 0)
-                elif key.endswith(".bias"):
-                    value = self._shard_tensor(value, tp_group, 0)
-            elif isinstance(module, RowParallelLinear):
-                if key.endswith(".weight"):
-                    value = self._shard_tensor(value, tp_group, -1)
-                elif key.endswith(".bias"):
-                    if tp_rank != 0:
-                        value = torch.zeros_like(value)
+            # Attention projections need special handling for KV when TP > num_kv_heads
+            if "self_attn" in key and key.endswith(".weight"):
+                # locate layer index
+                layer_match = key.split(".")
+                layer_idx = None
+                for i, part in enumerate(layer_match):
+                    if part == "layers" and i + 1 < len(layer_match):
+                        try:
+                            layer_idx = int(layer_match[i + 1])
+                            break
+                        except (ValueError, IndexError):
+                            pass
+                if layer_idx is not None and 0 <= layer_idx < len(self.model.layers):
+                    attention_layer = self.model.layers[layer_idx].self_attn
+                    head_dim = attention_layer.head_dim
+
+                    if "q_proj" in key:
+                        value = self._shard_tensor(value, tp_group, 0)
+                    elif "k_proj" in key or "v_proj" in key:
+                        total_kv_heads = (
+                            attention_layer.total_num_kv_heads
+                            if hasattr(attention_layer, "total_num_kv_heads")
+                            else self.config.num_key_value_heads
+                        )
+                        if tp_size > total_kv_heads:
+                            # replication: each rank holds exactly one KV head
+                            single_kv_head_size = head_dim
+                            # shard groups of replica ranks map to the same kv head id
+                            num_kv_head_replicas = getattr(
+                                attention_layer,
+                                "num_kv_head_replicas",
+                                max(1, tp_size // total_kv_heads),
+                            )
+                            kv_shard_id = tp_rank // num_kv_head_replicas
+                            start_idx = kv_shard_id * single_kv_head_size
+                            value = value.narrow(0, start_idx, single_kv_head_size)
+                        else:
+                            value = self._shard_tensor(value, tp_group, 0)
+                    elif "o_proj" in key:
+                        value = self._shard_tensor(value, tp_group, -1)
+                    updated_state_dict[key] = value
+                    continue
+
+            # Generic linear sharding path
+            if isinstance(module, RowParallelLinear) and key.endswith(".weight"):
+                value = self._shard_tensor(value, tp_group, -1)
+            elif isinstance(module, ColumnParallelLinear) and key.endswith(".weight"):
+                value = self._shard_tensor(value, tp_group, 0)
+            elif isinstance(module, ColumnParallelLinear) and key.endswith(".bias"):
+                value = self._shard_tensor(value, tp_group, 0)
+            elif isinstance(module, RowParallelLinear) and key.endswith(".bias"):
+                if tp_rank != 0:
+                    value = torch.zeros_like(value)
 
             updated_state_dict[key] = value
+
         self.load_state_dict(updated_state_dict, strict=False)
 
 
