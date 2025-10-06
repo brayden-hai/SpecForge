@@ -352,32 +352,56 @@ class LlamaAttention(nn.Module):
         )
         self._tp_rank = dist.get_rank(self.tp_group) if self.tp_group is not None else 0
         self.hidden_size = config.hidden_size
-        # per-shard head counts
+
+        # head dim based on total heads
+        total_num_heads = config.num_attention_heads
+        total_num_kv_heads = config.num_key_value_heads
         if hasattr(config, "head_dim"):
             self.head_dim = config.head_dim
         else:
-            # head_dim is consistent across shards; compute using total heads
-            self.head_dim = self.hidden_size // config.num_attention_heads
-        self.num_heads = config.num_attention_heads // self._tp_size
-        self.num_key_value_heads = config.num_key_value_heads // self._tp_size
+            self.head_dim = self.hidden_size // total_num_heads
+
+        # Per-shard heads for Q and O
         assert (
-            config.num_attention_heads % self._tp_size == 0
+            total_num_heads % self._tp_size == 0
         ), "num_attention_heads must be divisible by tp_size"
-        assert (
-            config.num_key_value_heads % self._tp_size == 0
-        ), "num_key_value_heads must be divisible by tp_size"
+        self.num_heads = total_num_heads // self._tp_size
+
+        # KV head sharding with replication when tp > kv
+        if self._tp_size > total_num_kv_heads:
+            # Replication mode: each rank holds one KV head replicated across groups
+            assert (
+                self._tp_size % total_num_kv_heads == 0
+            ), "tp_size must be a multiple of num_key_value_heads when replicating KV"
+            self.num_key_value_heads = 1
+            self.num_kv_head_replicas = self._tp_size // total_num_kv_heads
+            self.kv_head_replicas = True
+        else:
+            assert (
+                total_num_kv_heads % self._tp_size == 0
+            ), "num_key_value_heads must be divisible by tp_size when sharding KV"
+            self.num_key_value_heads = total_num_kv_heads // self._tp_size
+            self.num_kv_head_replicas = 1
+            self.kv_head_replicas = False
+
         self.num_key_value_groups = self.num_heads // self.num_key_value_heads
         self.max_position_embeddings = config.max_position_embeddings
 
-        # TP-aware projections
+        # TP-aware projections (K/V may replicate)
         self.q_proj = ColumnParallelLinear(
             self.hidden_size * 2, config.num_attention_heads * self.head_dim, bias=False
         )
         self.k_proj = ColumnParallelLinear(
-            self.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False
+            self.hidden_size * 2,
+            total_num_kv_heads * self.head_dim,
+            bias=False,
+            kv_head_replicas=self.kv_head_replicas,
         )
         self.v_proj = ColumnParallelLinear(
-            self.hidden_size * 2, config.num_key_value_heads * self.head_dim, bias=False
+            self.hidden_size * 2,
+            total_num_kv_heads * self.head_dim,
+            bias=False,
+            kv_head_replicas=self.kv_head_replicas,
         )
         self.o_proj = RowParallelLinear(
             config.num_attention_heads * self.head_dim, self.hidden_size, bias=False
