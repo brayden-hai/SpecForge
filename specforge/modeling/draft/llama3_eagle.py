@@ -464,11 +464,17 @@ class LlamaAttention(nn.Module):
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
 
-        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        query_states = query_states.view(
+            bsz, q_len, self.num_heads, self.head_dim
+        ).transpose(1, 2)
         # Derive KV heads from projection size to handle both sharded and replicated KV
         kv_heads_actual = key_states.shape[-1] // self.head_dim
-        key_states = key_states.view(bsz, q_len, kv_heads_actual, self.head_dim).transpose(1, 2)
-        value_states = value_states.view(bsz, q_len, kv_heads_actual, self.head_dim).transpose(1, 2)
+        key_states = key_states.view(
+            bsz, q_len, kv_heads_actual, self.head_dim
+        ).transpose(1, 2)
+        value_states = value_states.view(
+            bsz, q_len, kv_heads_actual, self.head_dim
+        ).transpose(1, 2)
         # Compute repeat factor dynamically
         kv_repeat = self.num_heads // kv_heads_actual
 
@@ -609,12 +615,14 @@ class LlamaFlexAttention(LlamaAttention):
         query_states = query_states.view(
             bsz, q_len, self.num_heads, self.head_dim
         ).transpose(1, 2)
+        kv_heads_actual = key_states.shape[-1] // self.head_dim
         key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
+            bsz, q_len, kv_heads_actual, self.head_dim
         ).transpose(1, 2)
         value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
+            bsz, q_len, kv_heads_actual, self.head_dim
         ).transpose(1, 2)
+        kv_repeat = self.num_heads // kv_heads_actual
 
         lck = past_seen_tokens // q_len
         if isinstance(self.rotary_emb, LlamaMutiRotaryEmbedding):
@@ -639,6 +647,10 @@ class LlamaFlexAttention(LlamaAttention):
             past_seen_tokens, past_seen_tokens + q_len, device=hidden_states.device
         )
         cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
+
+        # Repeat K/V along heads to match the number of Q heads
+        key_states = repeat_kv(key_states, kv_repeat)
+        value_states = repeat_kv(value_states, kv_repeat)
 
         key_cache, value_cache = past_key_values.update(
             key_states,
