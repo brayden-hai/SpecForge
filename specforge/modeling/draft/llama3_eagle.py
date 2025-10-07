@@ -464,15 +464,13 @@ class LlamaAttention(nn.Module):
         key_states = self.k_proj(hidden_states)
         value_states = self.v_proj(hidden_states)
 
-        query_states = query_states.view(
-            bsz, q_len, self.num_heads, self.head_dim
-        ).transpose(1, 2)
-        key_states = key_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
-        value_states = value_states.view(
-            bsz, q_len, self.num_key_value_heads, self.head_dim
-        ).transpose(1, 2)
+        query_states = query_states.view(bsz, q_len, self.num_heads, self.head_dim).transpose(1, 2)
+        # Derive KV heads from projection size to handle both sharded and replicated KV
+        kv_heads_actual = key_states.shape[-1] // self.head_dim
+        key_states = key_states.view(bsz, q_len, kv_heads_actual, self.head_dim).transpose(1, 2)
+        value_states = value_states.view(bsz, q_len, kv_heads_actual, self.head_dim).transpose(1, 2)
+        # Compute repeat factor dynamically
+        kv_repeat = self.num_heads // kv_heads_actual
 
         if cache_hidden is None:
             if isinstance(self.rotary_emb, LlamaMutiRotaryEmbedding):
@@ -492,8 +490,8 @@ class LlamaAttention(nn.Module):
                     query_states, key_states, cos, sin, position_ids
                 )
 
-            key_states = repeat_kv(key_states, self.num_key_value_groups)
-            value_states = repeat_kv(value_states, self.num_key_value_groups)
+            key_states = repeat_kv(key_states, kv_repeat)
+            value_states = repeat_kv(value_states, kv_repeat)
 
             attn_output = torch.nn.functional.scaled_dot_product_attention(
                 query_states,
@@ -523,8 +521,8 @@ class LlamaAttention(nn.Module):
                     query_states, key_states, cos, sin, position_ids
                 )
 
-            key_states = repeat_kv(key_states, self.num_key_value_groups)
-            value_states = repeat_kv(value_states, self.num_key_value_groups)
+            key_states = repeat_kv(key_states, kv_repeat)
+            value_states = repeat_kv(value_states, kv_repeat)
 
             cache_hidden[0] = cache_hidden[0] + [key_states]
             cache_hidden[1] = cache_hidden[1] + [value_states]

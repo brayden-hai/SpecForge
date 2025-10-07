@@ -509,6 +509,8 @@ def main():
                     image_grid_thw=data["image_grid_thw"].cuda(),
                 )
             else:
+                # is this working
+                print("Working on latest fork")
                 plosses, _, acces = eagle3_model(
                     input_ids=data["input_ids"].cuda(),
                     attention_mask=data["attention_mask"].cuda(),
