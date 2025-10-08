@@ -648,10 +648,6 @@ class LlamaFlexAttention(LlamaAttention):
         )
         cache_kwargs = {"sin": sin, "cos": cos, "cache_position": cache_position}
 
-        # Repeat K/V along heads to match the number of Q heads
-        key_states = repeat_kv(key_states, kv_repeat)
-        value_states = repeat_kv(value_states, kv_repeat)
-
         key_cache, value_cache = past_key_values.update(
             key_states,
             value_states,
@@ -690,7 +686,7 @@ class LlamaFlexAttention(LlamaAttention):
             key=key_cache.contiguous(),
             value=value_cache.contiguous(),
             block_mask=block_mask,
-            enable_gqa=False,
+            enable_gqa=True,
         )
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.head_dim * self.num_heads)
@@ -752,13 +748,8 @@ class LlamaDecoderLayer(nn.Module):
         super().__init__()
         self.hidden_size = config.hidden_size
 
-        if attention_backend == "sdpa":
-            self.self_attn = LlamaAttention(config=config)
-        elif attention_backend == "flex_attention":
-            print_with_rank("Using flex attention on draft model training!")
-            self.self_attn = LlamaFlexAttention(config=config)
-        else:
-            raise ValueError(f"Unknown attention backend {attention_backend}")
+        # Fallback to SDPA for draft model to ensure KV replication works reliably with TP
+        self.self_attn = LlamaAttention(config=config)
 
         self.mlp = LlamaMLP(config)
         # self.fc = nn.Linear(config.hidden_size * 2, config.hidden_size)
