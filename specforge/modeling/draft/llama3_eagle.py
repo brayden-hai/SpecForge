@@ -690,7 +690,7 @@ class LlamaFlexAttention(LlamaAttention):
             key=key_cache.contiguous(),
             value=value_cache.contiguous(),
             block_mask=block_mask,
-            enable_gqa=True,
+            enable_gqa=False,
         )
         attn_output = attn_output.transpose(1, 2).contiguous()
         attn_output = attn_output.reshape(bsz, q_len, self.head_dim * self.num_heads)
