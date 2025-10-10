@@ -53,6 +53,11 @@ def parse_arguments():
         help="Automatically launch sglang server if port is available",
     )
     parser.add_argument("--num-samples", type=int, default=None)
+    parser.add_argument(
+        "--is-preformatted",
+        action="store_true",
+        help="Treat input rows as preformatted text at 'text' field; skip chat templating.",
+    )
 
     return parser.parse_args()
 
@@ -266,14 +271,23 @@ def main():
 
             for _, line in zip(range(total_lines), input_file):
                 data = json.loads(line)
-                messages = data["conversations"]
 
-                # Remove original last assistant message
-                if messages[-1]["role"] == "assistant":
-                    messages = messages[:-1]
-                prompt = tokenizer.apply_chat_template(
-                    messages, tokenize=False, add_generation_prompt=True
-                )
+                if args.is_preformatted:
+                    if "text" not in data:
+                        raise ValueError(
+                            "--is-preformatted is set but input row has no 'text' field"
+                        )
+                    prompt = data["text"]
+                else:
+                    messages = data["conversations"]
+                    # Remove original last assistant message
+                    if messages and messages[-1]["role"] == "assistant":
+                        messages = messages[:-1]
+                    # Persist the trimmed messages back to avoid duplicate assistants in output
+                    data["conversations"] = messages
+                    prompt = tokenizer.apply_chat_template(
+                        messages, tokenize=False, add_generation_prompt=True
+                    )
 
                 # Add to batch
                 batch_prompts.append(prompt)
@@ -289,8 +303,11 @@ def main():
                         # Create assistant message
                         assistant_message = {"role": "assistant", "content": output}
 
-                        # Add assistant message to original conversations
-                        batch_data[i]["conversations"].append(assistant_message)
+                        # Add assistant message to conversations when present; otherwise store under 'generated'
+                        if "conversations" in batch_data[i]:
+                            batch_data[i]["conversations"].append(assistant_message)
+                        else:
+                            batch_data[i]["generated"] = output
 
                         # Write to output file
                         output_file_handle.write(
@@ -320,7 +337,10 @@ def main():
                 for i, output in enumerate(outputs):
                     assistant_message = {"role": "assistant", "content": output}
 
-                    batch_data[i]["conversations"].append(assistant_message)
+                    if "conversations" in batch_data[i]:
+                        batch_data[i]["conversations"].append(assistant_message)
+                    else:
+                        batch_data[i]["generated"] = output
                     output_file_handle.write(
                         json.dumps(batch_data[i], ensure_ascii=False) + "\n"
                     )
