@@ -273,11 +273,27 @@ def main():
                 data = json.loads(line)
 
                 if args.is_preformatted:
-                    if "text" not in data:
+                    # Prefer explicit preformatted text when present
+                    if isinstance(data.get("text"), str) and data["text"].strip():
+                        prompt = data["text"]
+                    # Otherwise, allow preformatted prompts embedded in conversations
+                    elif isinstance(data.get("conversations"), list) and data["conversations"]:
+                        conv = data["conversations"]
+                        # Trim any trailing assistant turns to avoid duplicates in saved output
+                        while len(conv) >= 1 and conv[-1].get("role") == "assistant":
+                            conv = conv[:-1]
+                        data["conversations"] = conv
+                        # Use the first user message content as the preformatted prompt
+                        user_msgs = [m for m in conv if m.get("role") == "user" and isinstance(m.get("content"), str)]
+                        if not user_msgs:
+                            raise ValueError(
+                                "--is-preformatted is set but no usable 'text' or user message found"
+                            )
+                        prompt = user_msgs[0]["content"]
+                    else:
                         raise ValueError(
-                            "--is-preformatted is set but input row has no 'text' field"
+                            "--is-preformatted requires 'text' or 'conversations' with a user message"
                         )
-                    prompt = data["text"]
                 else:
                     messages = data["conversations"]
                     # Remove original last assistant message
