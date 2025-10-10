@@ -532,30 +532,15 @@ def main():
 
             with FSDP.state_dict_type(eagle3_model, StateDictType.FULL_STATE_DICT):
                 model_state_dict = eagle3_model.state_dict()
-                state_to_save = {
-                    "epoch": epoch,
-                    "args": args,
-                }
-                state_to_save.update(optimizer.state_dict())
                 draft_model_state_dict = {
                     k.replace("draft_model.", ""): v
                     for k, v in model_state_dict.items()
                     if "draft_model." in k and "embed" not in k.lower()
                 }
-
-                if dist.get_rank() == 0:
-                    torch.save(
-                        state_to_save,
-                        os.path.join(epoch_output_dir, "training_state.pt"),
-                    )
-                    print_on_rank0(
-                        f"Saved full training state to {epoch_output_dir}/training_state.pt"
-                    )
-                    draft_model.save_pretrained(
-                        epoch_output_dir,
-                        state_dict=draft_model_state_dict,
-                    )
-                    print_on_rank0(f"Saved model configuration to {epoch_output_dir}")
+                draft_model.save_pretrained(
+                    os.path.join(args.output_dir, f"epoch_{epoch}"),
+                    state_dict=draft_model_state_dict,
+                )
                 dist.barrier()
 
     # Close the tracker at the end of training
