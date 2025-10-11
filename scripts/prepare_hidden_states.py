@@ -321,6 +321,11 @@ def parse_args():
     parser.add_argument("--enable-aux-hidden-states", action="store_true")
     parser.add_argument("--aux-hidden-states-layers", type=str, default=None)
     parser.add_argument("--build-dataset-num-proc", type=int, default=8)
+    parser.add_argument(
+        "--is-preformatted",
+        action="store_true",
+        help="Dataset rows already contain fully formatted prompts; expects a 'text' field or will derive it from conversations[0].content.",
+    )
 
     ServerArgs.add_cli_args(parser)
     BenchArgs.add_cli_args(parser)
@@ -357,6 +362,21 @@ def main():
     dataset = load_dataset("json", data_files=args.data_path)["train"]
     if args.num_samples is not None:
         dataset = dataset.select(range(args.num_samples))
+    # If preformatted and no 'text' column, derive it from the first user message content
+    if args.is_preformatted and ("text" not in dataset.column_names):
+        def to_text(batch):
+            texts = []
+            for convs in batch.get("conversations", []):
+                prompt = ""
+                if isinstance(convs, list):
+                    for m in convs:
+                        if isinstance(m, dict) and m.get("role") == "user" and isinstance(m.get("content"), str):
+                            prompt = m["content"]
+                            break
+                texts.append(prompt)
+            return {"text": texts}
+
+        dataset = dataset.map(to_text, batched=True, remove_columns=None)
     tokenizer = AutoTokenizer.from_pretrained(args.model_path)
     cache_params_string = (
         f"{args.data_path}-"
@@ -373,6 +393,7 @@ def main():
             max_length=args.max_length,
             cache_dir=os.path.join(args.cache_dir, "processed_dataset"),
             cache_key=cache_key,
+            is_preformatted=args.is_preformatted,
             num_proc=args.build_dataset_num_proc,
         )
         print_with_rank("Built dataset")
