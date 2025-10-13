@@ -224,17 +224,58 @@ class Eagle3DraftModel(PreTrainedModel, ABC):
 
         modules = dict(self.named_modules())
         for name, param in state_dict.items():
-            tensor_list = [torch.empty_like(param) for _ in range(tp_size)]
-            dist.all_gather(tensor_list, param.contiguous(), group=tp_group)
+            module_name = ".".join(name.split(".")[:-1])
+            module = modules.get(module_name)
+            is_weight = name.endswith(".weight")
+            is_col = isinstance(module, ColumnParallelLinear) and is_weight
+            is_row = isinstance(module, RowParallelLinear) and is_weight
+
             if tp_rank == 0:
-                module_name = ".".join(name.split(".")[:-1])
-                module = modules.get(module_name)
-                if isinstance(module, ColumnParallelLinear) and name.endswith(".weight"):
-                    reconstructed_state_dict[name] = torch.cat(tensor_list, dim=0)
-                elif isinstance(module, RowParallelLinear) and name.endswith(".weight"):
-                    reconstructed_state_dict[name] = torch.cat(tensor_list, dim=1)
+                if is_col:
+                    # Concatenate along dim 0 into CPU buffer
+                    full_out = module.out_features
+                    full_in = module.in_features
+                    shard_out = module.out_features_per_shard
+                    cpu_buf = torch.empty((full_out, full_in), dtype=param.dtype, device="cpu")
+                    for r in range(tp_size):
+                        if r == 0:
+                            shard_cpu = param.detach().cpu()
+                        else:
+                            recv_gpu = torch.empty_like(param, device=param.device)
+                            dist.recv(recv_gpu, src=r, group=tp_group)
+                            shard_cpu = recv_gpu.cpu()
+                            del recv_gpu
+                        start = r * shard_out
+                        end = start + shard_out
+                        cpu_buf[start:end, :] = shard_cpu
+                        del shard_cpu
+                    reconstructed_state_dict[name] = cpu_buf
+                elif is_row:
+                    # Concatenate along dim 1 into CPU buffer
+                    full_out = module.out_features
+                    full_in = module.in_features
+                    shard_in = module.in_features_per_shard
+                    cpu_buf = torch.empty((full_out, full_in), dtype=param.dtype, device="cpu")
+                    for r in range(tp_size):
+                        if r == 0:
+                            shard_cpu = param.detach().cpu()
+                        else:
+                            recv_gpu = torch.empty_like(param, device=param.device)
+                            dist.recv(recv_gpu, src=r, group=tp_group)
+                            shard_cpu = recv_gpu.cpu()
+                            del recv_gpu
+                        start = r * shard_in
+                        end = start + shard_in
+                        cpu_buf[:, start:end] = shard_cpu
+                        del shard_cpu
+                    reconstructed_state_dict[name] = cpu_buf
                 else:
-                    reconstructed_state_dict[name] = tensor_list[0]
+                    # Non-parallel or non-weight params: use local copy (identical across TP ranks)
+                    reconstructed_state_dict[name] = param.detach().cpu()
+            else:
+                # Non-aggregator TP ranks send only parallel weight shards
+                if is_col or is_row:
+                    dist.send(param.contiguous(), dst=0, group=tp_group)
 
         if global_rank == 0:
             super().save_pretrained(save_directory, state_dict=reconstructed_state_dict, **kwargs)
