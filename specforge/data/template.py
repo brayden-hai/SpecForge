@@ -96,6 +96,22 @@ TEMPLATE_REGISTRY.register(
 )
 
 TEMPLATE_REGISTRY.register(
+    name="llama3-preformatted-patient-agent",
+    template=ChatTemplate(
+        # Put the role labels inside the headers so they are NOT counted in assistant spans
+        # No newline after the labels per requirement
+        # THIS IS DIFFERENT FROM THE DEFAULT LLAMA3 TEMPLATE BECAUSE THE ROLE LABELS ARE INSIDE THE HEADERS
+        # THIS IS CRITICAL FOR THE PATIENT-AGENT DATASET BECAUSE THE ROLE LABELS ARE NEEDED TO BE COUNTED IN THE ASSISTANT SPANS
+        # Otherwise, the loss mask computation will be computed incorrectly.
+        assistant_header="<|start_header_id|>assistant<|end_header_id|>\n\nAgent: ",
+        user_header="<|start_header_id|>user<|end_header_id|>\n\nPatient: ",
+        system_prompt=None,
+        end_of_turn_token="<|eot_id|>",
+    ),
+)
+
+
+TEMPLATE_REGISTRY.register(
     name="llama4",
     template=ChatTemplate(
         assistant_header="<|header_start|>assistant<|header_end|>\n\n",
