@@ -315,12 +315,19 @@ def parse_args():
     parser.add_argument("--cache-dir", type=str, default="./cache")
     parser.add_argument("--output-path", type=str, default=None)
     parser.add_argument("--max-length", type=int, default=2048)
-    # parser.add_argument("--chat-template", type=str, default="llama3")
+    parser.add_argument("--chat-template", type=str, default="llama3")
 
     parser.add_argument("--num-samples", type=int, default=None)
     parser.add_argument("--enable-aux-hidden-states", action="store_true")
     parser.add_argument("--aux-hidden-states-layers", type=str, default=None)
     parser.add_argument("--build-dataset-num-proc", type=int, default=8)
+    parser.add_argument(
+        "--is-preformatted",
+        action="store_true",
+        help=(
+            "Input rows are preformatted single 'text' strings; use chat template only for span identification."
+        ),
+    )
 
     ServerArgs.add_cli_args(parser)
     BenchArgs.add_cli_args(parser)
@@ -373,6 +380,7 @@ def main():
             max_length=args.max_length,
             cache_dir=os.path.join(args.cache_dir, "processed_dataset"),
             cache_key=cache_key,
+            is_preformatted=args.is_preformatted,
             num_proc=args.build_dataset_num_proc,
         )
         print_with_rank("Built dataset")
