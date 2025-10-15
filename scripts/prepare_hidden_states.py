@@ -315,7 +315,6 @@ def parse_args():
     parser.add_argument("--cache-dir", type=str, default="./cache")
     parser.add_argument("--output-path", type=str, default=None)
     parser.add_argument("--max-length", type=int, default=2048)
-    parser.add_argument("--chat-template", type=str, default="llama3")
 
     parser.add_argument("--num-samples", type=int, default=None)
     parser.add_argument("--enable-aux-hidden-states", action="store_true")
