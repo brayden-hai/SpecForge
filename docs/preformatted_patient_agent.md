@@ -321,7 +321,7 @@ torchrun --nproc_per_node=8 scripts/train_eagle3_offline.py \
   - Keep ttt-length unchanged; adjust LR only if still unstable (e.g., reduce to 1e-5).
 
 ```bash
-WANDB_API_KEY="dd8a44b7199a83dabb48e348ed3b336c2fb6eba8" \
+WANDB_API_KEY="DUMMY" \
 setsid torchrun \
   --standalone \
   --nproc_per_node=8 \
@@ -352,7 +352,7 @@ setsid torchrun \
 Example with W&B and your current settings:
 
 ```bash
-WANDB_API_KEY="dd8a44b7199a83dabb48e348ed3b336c2fb6eba8" \
+WANDB_API_KEY="DUMMY" \
 setsid torchrun \
   --standalone \
   --nproc_per_node=8 \

@@ -28,20 +28,20 @@ Target: push acceptance length (avg accepted tokens per verify round) toward 2.0
     - Higher acceptance: `(4,3,6)` # Already tried this.
     - Conservative/low latency: `(3,2,4)`
     - Throughput‑leaning: `(6,4,10)` (watch AL and OOM)
-  - Verify with `temperature=0`, no repetition/top‑p during verification
+  - Verify with `temperature=0`, no repetition/top‑p during verification (done)
 
 ### 2) Formatting / masking issues
 - Symptom: Draft trains on wrong spans; AL capped.
 - Causes: header‑only assistant turns, missing EOT between turns, labels counted as content, template mismatch.
 - Fixes:
-  - Embed `Agent:`/`Patient:` in headers (custom template) so labels are not masked
-  - Ensure exactly one `<|eot_id|>` between turns; final EOT optional
-  - Drop/merge header‑only assistant segments
-  - Validate with loss‑mask visualization and sum stats
+  - Embed `Agent:`/`Patient:` in headers (custom template) so labels are not masked (done)
+  - Ensure exactly one `<|eot_id|>` between turns; final EOT optional (done)
+  - Drop/merge header‑only assistant segments (done)
+  - Validate with loss‑mask visualization and sum stats (done)
 
 ### 3) Tokenizer/template inconsistency across stages
 - Symptom: Good train acc, poor AL at inference.
-- Causes: different tokenizer or chat template in any stage.
+- Causes: different tokenizer or chat template in any stage. (no)
 - Fixes: pin the same tokenizer path and template name for conversion, extraction, training, inference.
 
 ### 4) Vocab mapping coverage (t2d/d2t)
